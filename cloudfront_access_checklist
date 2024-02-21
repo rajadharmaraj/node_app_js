@@ -1,0 +1,119 @@
+Cloudfront with Lambda access validation checklist
+
+1. Review all the IAM policies and roles related to the CloudFront distribution, origin (S3 or Lambda@Edge), and CloudFront origin access identity (OAI). Verify the necessary get, put, and access permissions are configured properly between all components. 
+CloudFront Distribution
+•	The IAM user/role creating the CloudFront distribution needs the cloudfront:CreateDistribution and cloudfront:UpdateDistribution permissions.
+•	The trust policy allows the CloudFront service to assume the role.
+CloudFront Origin Access Identity (OAI)
+•	The OAI has an IAM role allowing CloudFront to use it to access the origin.
+•	Permissions should be limited to minimum necessities like s3:GetObject.
+S3 Bucket (if used as origin)
+•	The bucket policy allows access from the OAI, granting permissions like s3:GetObject.
+•	Trust policy allows CloudFront OAI service to take actions on the bucket.
+Lambda function (if used as origin)
+•	Execution role has AWSLambdaBasicExecutionRole managed policy to allow CloudFront to invoke Lambda.
+•	Trust policy allows lambda.amazonaws.com and edgelambda.amazonaws.com services.
+
+2.  Check the resource/trust policies on the origin to confirm the OAI has access. For S3 origins, make sure the OAI has s3:GetObject permission on the bucket policy. For Lambda@Edge, verify the function execution role trusts CloudFront and has the proper managed policy for access. 
+For S3 Bucket Origins:
+The S3 bucket policy needs to explicitly allow access to the CloudFront OAI. This is done by specifying the OAI Canonical User ID as a principal in the bucket policy and allowing s3:GetObject permission
+{
+  "Version":"2012-10-17",
+  "Statement":[
+    {
+      "Sid":"AllowCloudFrontAccess",
+      "Effect":"Allow",
+      "Principal": {
+        "CanonicalUser": "CloudFront_OAI_Canonical_ID_Here"  
+      },
+      "Action":"s3:GetObject",
+      "Resource":"arn:aws:s3:::my-bucket/*"
+    }
+  ]
+}
+This allows the OAI access to GET objects from S3 to serve through CloudFront.
+For Lambda Function Origins:
+The Lambda function execution role's trust policy needs to allow lambda.amazonaws.com and edgelambda.amazonaws.com services to assume the role on behalf of CloudFront.
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": [
+          "lambda.amazonaws.com",
+          "edgelambda.amazonaws.com" 
+        ]
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+
+
+3.  In the CloudFront distribution settings, confirm the OAI is enabled and established as an origin access entity under the distribution behaviors. 
+When creating or editing a CloudFront web distribution, under the Behaviors settings for a given path pattern, you need to click the button to Edit the Origin Settings.
+In the Origin Settings popup, first make sure the Origin Access Identity field is set to Yes.
+There will be a dropdown to select the OAI to associate with this origin. The OAI should have been created separately under the CloudFront Identities section.
+Once an existing OAI is selected or a new one created:
+•	CloudFront will automatically update the origin resource/bucket policy to allow access from this OAI when possible.
+•	The OAI will be added to the origin’s access control list.
+Under the origin list, you should see the chosen OAI listed as an origin access entity.
+Finally, make sure the selected OAI has the appropriate IAM permissions to access the origin - e.g S3 GetObject rights or Lambda execution rights.
+
+
+4.  Try creating a new OAI instead of adding an existing one and confirm new OAI has necessary permissions, especially for Lambda@Edge executions. 
+Instead of only adding an existing OAI to the CloudFront distribution, try creating a brand new OAI specifically for this distribution and origin integration.
+The steps would be:
+1.	In the CloudFront console, under Identities, click Create Origin Access Identity
+2.	Specify a comment and create the new OAI
+3.	When updating the distribution, select the option to create a new OAI instead of choosing an existing one
+4.	CloudFront will automatically create an IAM role and policy granting this new OAI access to the associated origin
+5.	For an S3 bucket origin, confirm the new OAI has s3:GetObject permission on the bucket resource policy
+6.	For a Lambda@Edge function origin, check the execution role to verify the OAI trust relationship is established and necessary permissions granted
+7.	The OAI will be added to the origin access control list
+Creating a fully new OAI instead of reusing an existing one helps rule out any issues with an OAI that may have been configured incorrectly.
+We can then validate explicitly that the new OAI has the required permissions to access the origin, especially important for Lambda executions.
+
+
+5.  Enable access logs for CloudFront and origins to audit and debug each access request. Check for patterns in failed requests. Also check CloudWatch metrics. 
+CloudFront Access Logs
+In the CloudFront distribution settings:
+•	Enable “Standard Logs” to send log files to an S3 bucket
+•	Include the “Viewer”, “Time” and “c-ip” fields at minimum
+•	Set log file prefix like “cloudfront-logs/”
+This will log all incoming viewer requests for the distribution, including any failed requests.
+Origin Access Logs
+For S3 origin:
+•	Enable S3 server access logging on the origin bucket
+•	Send logs to a different S3 bucket
+•	Include request details like requester, bucket, time etc
+For Lambda@Edge origin:
+•	Check CloudWatch Logs Insights for function logs
+•	Enable active tracing to send to X-Ray
+Analyzing Logs
+Failing requests will have 4xx or 5XX error codes.
+•	Pattern match on status codes to find failures
+•	Review exceptions or error messages
+•	Graph patterns over time
+Access logs allow debugging request flows and failures
+
+
+6.  Test by hitting the CloudFront distribution endpoint and validating logs. Attempt accessing the origin directly to isolate issue.
+Test CloudFront Distribution
+•	Use curl or Postman to send GET requests to the CloudFront distribution endpoint.
+•	Send requests for content you know exists in the origin (S3 or Lambda)
+•	Confirm 200 OK responses and valid content
+•	Check CloudFront logs to validate requests were properly logged
+Test Origin Access
+•	Bypass CloudFront and query the origin directly using the S3 ARN or Lambda invoke CLI
+•	Validate ability to access objects or execute function directly
+•	Confirm valid logs of the requests in origin access logs
+Comparison
+•	Compare CloudFront vs Origin only logs side by side
+•	Differences indicate issues in communication between services
+•	Errors only through CloudFront point to integration problems
+This helps determine if issues exist in general origin availability or specifically in the CloudFront integration/access.
+
+
+
